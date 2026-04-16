@@ -1,59 +1,38 @@
-/**
- * Company name and amount normalization utilities.
- *
- * Cross-system entity matching requires normalizing company names so that
- * variant spellings can be compared.  For example, these should all be
- * recognized as the same entity:
- *
- *   - "Acme Corp"
- *   - "ACME Corporation"
- *   - "acme corp."
- *   - "Acme Corporation Ltd."
- *   - "ACME, Inc."
- *   - "The Acme Company"
- *
- * Normalization steps:
- * 1. Convert to lowercase
- * 2. Remove common legal suffixes (Inc, Corp, Corporation, Ltd, LLC, GmbH,
- *    AG, SA, SAS, BV, NV, Pty, Co, Company, Group, Holdings, etc.)
- * 3. Remove common prefixes ("The ")
- * 4. Remove punctuation (periods, commas, hyphens) but preserve spaces
- * 5. Collapse multiple spaces into one
- * 6. Trim leading and trailing whitespace
- *
- * @module utils/normalization
- */
+const LEGAL_SUFFIXES = /\b(inc|llc|ltd|corp|corporation|gmbh|ag|sa|sas|bv|nv|pty|co|company|group|holdings|limited|incorporated)\b\.?/gi;
+const COMMON_PREFIXES = /^the\s+/i;
+const PUNCTUATION = /[.,\-'"\u2018\u2019\u201C\u201D()]/g;
+const COLLAPSE_SPACES = /\s{2,}/g;
 
 /**
  * Normalize a company name for fuzzy matching.
  *
- * @param name - Raw company name from any data source
- * @returns Normalized name suitable for comparison
+ * Steps: lowercase, strip legal suffixes, strip "The " prefix,
+ * remove punctuation, collapse spaces, trim.
  */
 export function normalizeCompanyName(name: string): string {
-  // TODO: Implement company name normalization
-  throw new Error('Not implemented');
+  let n = name.toLowerCase();
+  n = n.replace(COMMON_PREFIXES, '');
+  n = n.replace(LEGAL_SUFFIXES, '');
+  n = n.replace(PUNCTUATION, ' ');
+  n = n.replace(COLLAPSE_SPACES, ' ');
+  return n.trim();
 }
 
+const ZERO_DECIMAL_CURRENCIES = new Set(['jpy', 'krw', 'clp', 'vnd', 'bif', 'djf', 'gnf', 'kmf', 'mga', 'pyg', 'rwf', 'ugx', 'vuf', 'xaf', 'xof', 'xpf']);
+
 /**
- * Normalize a monetary amount to a standard representation.
+ * Normalize a monetary amount to major currency units.
  *
- * Handles common inconsistencies:
- * - Some systems store amounts in cents (integer), others in dollars (decimal).
- * - Negative amounts may represent refunds or credits.
- * - Very large amounts (> 1,000,000) in "cents" currencies should be
- *   divided by 100 to get the dollar value.
- *
- * The heuristic:
- * - If `currency` is a zero-decimal currency (JPY, KRW, etc.), return as-is.
- * - If the amount is an integer and > 10,000, assume it's in cents and divide by 100.
- * - Otherwise return as-is (assumed to be in major currency units).
- *
- * @param amount - Raw amount value
- * @param currency - ISO 4217 currency code
- * @returns Amount normalized to major currency units (e.g., dollars, not cents)
+ * Heuristic:
+ * - Zero-decimal currencies (JPY, KRW, etc.) returned as-is.
+ * - Integers > 10,000 assumed to be in minor units -> divide by 100.
+ * - Otherwise returned as-is.
  */
 export function normalizeAmount(amount: number, currency: string): number {
-  // TODO: Implement amount normalization
-  throw new Error('Not implemented');
+  const c = currency.toLowerCase();
+  if (ZERO_DECIMAL_CURRENCIES.has(c)) return amount;
+  if (Number.isInteger(amount) && Math.abs(amount) > 10_000) {
+    return amount / 100;
+  }
+  return amount;
 }

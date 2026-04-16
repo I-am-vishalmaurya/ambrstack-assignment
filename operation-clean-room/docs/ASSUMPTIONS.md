@@ -57,3 +57,22 @@ date it was made.
 | 4 | Entity resolution confidence scores below 0.30 result in ORPHAN_RECORD discrepancy — the record is not silently dropped | Auditors need to see every unmatched record. Silent drops create gaps in the audit trail that cannot be explained. Surfacing orphans as discrepancies forces resolution. | Orphan list may be noisy if the threshold is too high. 0.30 is the floor defined by the test suite. Threshold is configurable. | 2026-04-15 |
 | 5 | Revenue discrepancies below 2% between systems are logged but not flagged as errors | CFO brief specifies the 2% threshold explicitly. Sub-threshold differences are likely FX rounding, proration timing, or day-count conventions between systems. | If the CFO meant 2% as an absolute dollar threshold (not percentage), small-MRR accounts with large dollar discrepancies would be missed. Interpretation: percentage, as stated in the brief. | 2026-04-15 |
 | 6 | NPS survey recency decay is applied: responses older than 180 days contribute at 50% weight to the NPS health signal | A 6-month-old NPS response is a weak signal of current sentiment. Flat weighting would make health scores slow to update on deteriorating accounts. | If accounts have infrequent survey cadences (e.g., annual NPS), the decay will underweight their scores. A flag is added when NPS signal is based on data older than 180 days. | 2026-04-15 |
+
+---
+
+## Implementation Map
+
+| Assumption | Module | Notes |
+|---|---|---|
+| Data #1: Legacy DD/MM/YYYY dates | `packages/data-engine/src/utils/date-parser.ts` | `parseAmbiguousDate()` with `formatHint: 'DD/MM/YYYY'` default for legacy data |
+| Data #2: Zero-decimal currencies | `packages/data-engine/src/utils/normalization.ts` | `normalizeAmount()` handles JPY, KRW etc. |
+| Data #3: Currency amounts in minor units | `packages/data-engine/src/utils/normalization.ts` | Heuristic: integers > 10,000 treated as minor units |
+| Data #4: FX earliest rate fallback | `packages/data-engine/src/utils/fx.ts` | `convertToUSDWithMeta()` returns `fxRateApproximated: true` |
+| Data #5: Legacy ALLCAPS names | `packages/data-engine/src/reconciliation/entity-resolution.ts` | Pass 3: abbreviation lookup + Jaccard similarity |
+| Data #6: Product events by account_id | `packages/data-engine/src/health/scorer.ts` | Falls back to `unavailable` if unresolvable |
+| Business #1: ARR excludes trials | `packages/data-engine/src/metrics/arr.ts` | `excludeTrials` option (default true) |
+| Business #2: NRR trailing 12-month | `packages/data-engine/src/metrics/nrr.ts` | TTM calculation with period-end FX rates |
+| Business #3: Cancel+re-sign = churn + new logo | `packages/data-engine/src/metrics/churn.ts` | Separate churn and new logo tracking |
+| Business #4: Contraction separate from churn | `packages/data-engine/src/metrics/churn.ts` | `grossChurn` only includes full cancellations |
+| Business #5: Zombie deals 180 days | `packages/data-engine/src/reconciliation/pipeline.ts` | `zombieThresholdDays` defaults to 180 |
+| Business #6: Unit economics margins | `packages/data-engine/src/metrics/unit-economics.ts` | Starter 0.65, Growth/Enterprise/Scale 0.78 |

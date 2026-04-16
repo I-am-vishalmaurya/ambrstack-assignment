@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { registerRoutes } from './routes/index.js';
+import { getData } from './data/singleton.js';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
@@ -39,6 +40,15 @@ app.use((req, _res, next) => {
 // ---------------------------------------------------------------------------
 
 registerRoutes(app);
+
+// Eagerly load data at startup
+getData()
+  .then(() => {
+    console.log('[startup] Data loaded, server fully ready');
+  })
+  .catch((err) => {
+    console.error('[startup] Failed to load data:', err);
+  });
 
 // ---------------------------------------------------------------------------
 // Global error handler

@@ -14,7 +14,14 @@ import { createInterface } from 'node:readline';
  * @returns The parsed JSON value.
  */
 export async function loadJSON<T>(filePath: string): Promise<T> {
-  const raw = await readFile(filePath, 'utf-8');
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[json-loader] Failed to read ${filePath}:`, msg);
+    throw new Error(`Failed to read JSON file ${filePath}: ${msg}`);
+  }
 
   // Strip UTF-8 BOM if present
   const content = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
@@ -22,11 +29,9 @@ export async function loadJSON<T>(filePath: string): Promise<T> {
   try {
     return JSON.parse(content) as T;
   } catch (err) {
-    throw new Error(
-      `Failed to parse JSON file ${filePath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[json-loader] Failed to parse ${filePath}:`, msg);
+    throw new Error(`Failed to parse JSON file ${filePath}: ${msg}`);
   }
 }
 
@@ -50,27 +55,36 @@ export async function loadJSONL<T>(filePath: string): Promise<T[]> {
   const records: T[] = [];
   let lineNumber = 0;
 
-  const rl = createInterface({
-    input: createReadStream(filePath, { encoding: 'utf-8' }),
-    crlfDelay: Infinity,
-  });
+  let rl: ReturnType<typeof createInterface>;
+  try {
+    rl = createInterface({
+      input: createReadStream(filePath, { encoding: 'utf-8' }),
+      crlfDelay: Infinity,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[json-loader] Failed to open JSONL ${filePath}:`, msg);
+    throw new Error(`Failed to open JSONL file ${filePath}: ${msg}`);
+  }
 
-  for await (const line of rl) {
-    lineNumber++;
+  try {
+    for await (const line of rl) {
+      lineNumber++;
 
-    // Skip empty lines and lines that are only whitespace
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
+      // Skip empty lines and lines that are only whitespace
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
 
-    try {
-      records.push(JSON.parse(trimmed) as T);
-    } catch (err) {
-      throw new Error(
-        `Failed to parse JSONL at line ${lineNumber} in ${filePath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      try {
+        records.push(JSON.parse(trimmed) as T);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[json-loader] JSONL parse error at line ${lineNumber} in ${filePath}:`, msg);
+        throw new Error(`Failed to parse JSONL at line ${lineNumber} in ${filePath}: ${msg}`);
+      }
     }
+  } finally {
+    rl.close();
   }
 
   return records;

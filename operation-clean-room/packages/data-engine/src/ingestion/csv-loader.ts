@@ -1,5 +1,5 @@
-import { createReadStream } from 'node:fs';
-import { parse, type Options as CSVParseOptions } from 'csv-parse';
+import { readFile } from 'node:fs/promises';
+import { parse, type Options as CSVParseOptions } from 'csv-parse/sync';
 
 /**
  * Options for the generic CSV loader.
@@ -25,27 +25,9 @@ export interface CSVOptions {
 /**
  * Load and parse a CSV file into a typed array of records.
  *
- * Handles common real-world CSV issues:
- * - UTF-8 BOM markers
- * - Trailing commas on rows
- * - Inconsistent quoting
- * - Empty trailing rows
- *
- * @typeParam T - The target record type. Fields are coerced from strings by
- *   the optional `transform` callback; without it every value is a string.
+ * @typeParam T - The target record type.
  * @param filePath - Absolute or relative path to the CSV file.
  * @param options  - Parsing options (see {@link CSVOptions}).
- * @returns An array of parsed records.
- *
- * @example
- * ```ts
- * const payments = await loadCSV<StripePayment>('data/stripe_payments.csv', {
- *   transform: (row) => ({
- *     ...row,
- *     amount: Number(row.amount),
- *   }),
- * });
- * ```
  */
 export async function loadCSV<T>(
   filePath: string,
@@ -60,39 +42,47 @@ export async function loadCSV<T>(
     transform,
   } = options;
 
+  let rawText: string;
+  try {
+    rawText = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[csv-loader] Failed to read ${filePath}:`, msg);
+    throw new Error(`Failed to read CSV file ${filePath}: ${msg}`);
+  }
+
+  const content = stripBOM && rawText.charCodeAt(0) === 0xfeff ? rawText.slice(1) : rawText;
+
   const parseOptions: CSVParseOptions = {
     delimiter,
     columns: headers,
     from_line: skipLines + 1,
-    bom: stripBOM,
-    trim,
     skip_empty_lines: true,
-    relax_column_count: true, // handles trailing commas
-    cast: false, // we rely on the explicit transform instead
+    relax_column_count: true,
+    cast: false,
+    trim,
   };
 
-  return new Promise<T[]>((resolve, reject) => {
-    const records: T[] = [];
+  let rows: Record<string, string>[];
+  try {
+    rows = parse(content, parseOptions) as Record<string, string>[];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[csv-loader] Failed to parse ${filePath}:`, msg);
+    throw new Error(`Failed to parse CSV file ${filePath}: ${msg}`);
+  }
 
-    createReadStream(filePath, { encoding: 'utf-8' })
-      .pipe(parse(parseOptions))
-      .on('data', (record: Record<string, string>) => {
-        try {
-          const transformed = transform ? transform(record) : record;
-          records.push(transformed as T);
-        } catch (err) {
-          reject(
-            new Error(
-              `CSV transform error at row ${records.length + 1} in ${filePath}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            ),
-          );
-        }
-      })
-      .on('end', () => resolve(records))
-      .on('error', (err) =>
-        reject(new Error(`Failed to parse CSV file ${filePath}: ${err.message}`)),
-      );
-  });
+  const out: T[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    try {
+      const transformed = transform ? transform(rows[i]!) : rows[i];
+      out.push(transformed as T);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[csv-loader] Transform error at row ${i + 1} in ${filePath}:`, msg);
+      throw new Error(`CSV transform error at row ${i + 1} in ${filePath}: ${msg}`);
+    }
+  }
+
+  return out;
 }

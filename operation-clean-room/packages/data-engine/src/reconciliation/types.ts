@@ -189,7 +189,7 @@ export interface DuplicateResult {
 
 /** Result of CRM pipeline quality analysis. */
 export interface PipelineAnalysisResult {
-  /** Opportunities with no activity for 90+ days. */
+  /** Opportunities with no activity beyond the configured zombie threshold (default 180 days). */
   zombieDeals: {
     opportunityId: string;
     accountName: string;

@@ -58,7 +58,14 @@ export async function loadXML<T>(
     parseNumbers = true,
   } = options;
 
-  const raw = await readFile(filePath, 'utf-8');
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf-8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[xml-loader] Failed to read ${filePath}:`, msg);
+    throw new Error(`Failed to read XML file ${filePath}: ${msg}`);
+  }
 
   // Strip UTF-8 BOM if present
   const content = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
@@ -80,10 +87,8 @@ export async function loadXML<T>(
   try {
     return parser.parse(content) as T;
   } catch (err) {
-    throw new Error(
-      `Failed to parse XML file ${filePath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[xml-loader] Failed to parse ${filePath}:`, msg);
+    throw new Error(`Failed to parse XML file ${filePath}: ${msg}`);
   }
 }

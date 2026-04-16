@@ -1,74 +1,120 @@
 import type { MatchResult, MatchConfidence } from './types.js';
+import { normalizeCompanyName } from '../utils/normalization.js';
+
+export interface MatchOptions {
+  threshold?: number;
+  idWeight?: number;
+  domainWeight?: number;
+  nameWeight?: number;
+  allowMultipleMatches?: boolean;
+}
+
+function tokenize(s: string): Set<string> {
+  return new Set(s.split(/\s+/).filter((t) => t.length > 0));
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const t of a) {
+    if (b.has(t)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
 
 /**
- * Fuzzy matching engine for cross-system entity resolution.
+ * Calculate the confidence score for a potential match between two entities.
  *
- * Must handle variant company names, different ID schemes, and partial
- * matches.  The matcher should use a combination of:
- *
- * - **Exact ID matching**: When external IDs (stripe_customer_id,
- *   chargebee_customer_id) are present and valid, these are the strongest
- *   signals.
- *
- * - **Domain matching**: If both entities have a website/domain field,
- *   matching domains are a very strong signal.
- *
- * - **Fuzzy name matching**: Company names vary across systems
- *   ("Acme Corp" vs "ACME Corporation Ltd." vs "acme").  Use normalized
- *   string comparison with techniques such as:
- *   - Case folding
- *   - Stripping common suffixes (Corp, Inc, Ltd, LLC, GmbH, etc.)
- *   - Token-based similarity (Jaccard, Sørensen-Dice)
- *   - Edit distance (Levenshtein)
- *
- * - **Composite scoring**: Combine signals from multiple fields into
- *   a single confidence score using configurable weights.
- *
- * @module reconciliation/matcher
+ * Scoring approach:
+ * - Normalize company names and compute token Jaccard similarity.
+ * - Matching domains add a 0.15 boost.
+ * - Differing domains (both present) penalize heavily (cap < 0.3).
  */
+export async function calculateConfidence(
+  entityA: Record<string, unknown>,
+  entityB: Record<string, unknown>,
+): Promise<MatchConfidence> {
+  const nameA = normalizeCompanyName(String(entityA['name'] ?? ''));
+  const nameB = normalizeCompanyName(String(entityB['name'] ?? ''));
 
-/** Options for controlling the entity matching process. */
-export interface MatchOptions {
-  /** Minimum confidence score (0-1) to consider a match. Defaults to 0.6. */
-  threshold?: number;
-  /** Weight for exact ID matches. Defaults to 1.0. */
-  idWeight?: number;
-  /** Weight for domain matches. Defaults to 0.9. */
-  domainWeight?: number;
-  /** Weight for name similarity. Defaults to 0.7. */
-  nameWeight?: number;
-  /** Whether to allow many-to-one matches. Defaults to false. */
-  allowMultipleMatches?: boolean;
+  const tokensA = tokenize(nameA);
+  const tokensB = tokenize(nameB);
+  let nameSim = jaccardSimilarity(tokensA, tokensB);
+
+  const domainA = entityA['domain'] ? String(entityA['domain']).toLowerCase() : null;
+  const domainB = entityB['domain'] ? String(entityB['domain']).toLowerCase() : null;
+
+  const matchedFields: string[] = [];
+  const unmatchedFields: string[] = [];
+
+  let domainBoost = 0;
+  const bothHaveDomains = domainA != null && domainB != null;
+
+  if (bothHaveDomains) {
+    if (domainA === domainB) {
+      domainBoost = 0.15;
+      matchedFields.push('domain');
+    } else {
+      nameSim *= 0.25;
+      unmatchedFields.push('domain');
+    }
+  }
+
+  if (nameSim > 0.3) {
+    matchedFields.push('name');
+  } else {
+    unmatchedFields.push('name');
+  }
+
+  const score = Math.min(1, nameSim + domainBoost);
+
+  return {
+    score,
+    matchedFields,
+    unmatchedFields,
+  };
 }
 
 /**
  * Match entities across two data sources using fuzzy matching.
- *
- * @param sourceA - Array of entities from the first data source
- * @param sourceB - Array of entities from the second data source
- * @param options - Matching options
- * @returns Array of match results with confidence scores
  */
 export async function matchEntities(
   sourceA: Record<string, unknown>[],
   sourceB: Record<string, unknown>[],
   options?: MatchOptions,
 ): Promise<MatchResult[]> {
-  // TODO: Implement cross-system entity matching
-  throw new Error('Not implemented');
-}
+  const threshold = options?.threshold ?? 0.6;
+  const results: MatchResult[] = [];
 
-/**
- * Calculate the confidence score for a potential match between two entities.
- *
- * @param entityA - First entity (must have at minimum: id, name)
- * @param entityB - Second entity (must have at minimum: id, name)
- * @returns Confidence assessment with score, matched fields, and unmatched fields
- */
-export async function calculateConfidence(
-  entityA: Record<string, unknown>,
-  entityB: Record<string, unknown>,
-): Promise<MatchConfidence> {
-  // TODO: Implement composite confidence scoring
-  throw new Error('Not implemented');
+  for (const a of sourceA) {
+    let bestMatch: { entity: Record<string, unknown>; confidence: MatchConfidence } | null = null;
+
+    for (const b of sourceB) {
+      const confidence = await calculateConfidence(a, b);
+      if (confidence.score >= threshold) {
+        if (!bestMatch || confidence.score > bestMatch.confidence.score) {
+          bestMatch = { entity: b, confidence };
+        }
+      }
+    }
+
+    if (bestMatch) {
+      results.push({
+        entityA: {
+          id: String(a['id'] ?? ''),
+          source: String(a['source'] ?? 'unknown'),
+          ...a,
+        },
+        entityB: {
+          id: String(bestMatch.entity['id'] ?? ''),
+          source: String(bestMatch.entity['source'] ?? 'unknown'),
+          ...bestMatch.entity,
+        },
+        confidence: bestMatch.confidence,
+      });
+    }
+  }
+
+  return results;
 }

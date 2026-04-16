@@ -113,6 +113,8 @@ export interface ChurnBreakdown {
 
 /** Result of a churn calculation. */
 export interface ChurnResult {
+  /** True when gross revenue churn exceeds a 3.0% benchmark. */
+  grossRevenueChurnBreachesThreshold: boolean;
   /** Gross revenue churn rate (% of starting revenue lost, before expansion). */
   grossChurn: number;
   /** Net revenue churn rate (% lost after accounting for expansion). */
@@ -160,6 +162,10 @@ export interface ChannelEconomics {
 
 /** Result of a unit economics calculation. */
 export interface UnitEconomics {
+  /** Target payback window in months (benchmark). */
+  paybackTargetMonths: number;
+  /** Whether blended payback is within the target window. */
+  paybackOnTarget: boolean;
   /** Blended customer acquisition cost. */
   cac: number;
   /** Estimated customer lifetime value. */

@@ -1,46 +1,115 @@
+import type { LoadedData } from '../data/bootstrap.js';
+import type { ChargebeeSubscription } from '../ingestion/types.js';
 import type { CohortData, MetricOptions } from './types.js';
+import { addMonths, endOfMonth } from 'date-fns';
+import { convertToUSD } from '../utils/fx.js';
+
+function cohortMonthKey(createdAt: string): string {
+  return createdAt.slice(0, 7);
+}
+
+function wasActiveOnDate(sub: ChargebeeSubscription, snapshot: Date): boolean {
+  const created = new Date(sub.created_at);
+  if (Number.isNaN(created.getTime()) || created > snapshot) return false;
+  if (sub.cancelled_at) {
+    const c = new Date(sub.cancelled_at);
+    if (!Number.isNaN(c.getTime()) && c <= snapshot) return false;
+  }
+  return true;
+}
+
+function mrrUsd(sub: ChargebeeSubscription, asOf: Date, fx: LoadedData['fxRates']): number {
+  if (sub.mrr <= 0) return 0;
+  return convertToUSD(sub.mrr, sub.plan.currency, asOf, fx);
+}
 
 /**
- * Cohort retention analysis.
+ * Cohort retention analysis for Chargebee subscriptions.
  *
- * Groups customers by their signup month and tracks how their revenue
- * and engagement change over time.  This is one of the most important
- * analyses for understanding long-term business health.
- *
- * How it works:
- * 1. **Define cohorts**: Group all customers by the month they first became
- *    paying customers (i.e., their trial-to-paid conversion date or first
- *    payment date, NOT the trial start date).
- *
- * 2. **Track revenue retention**: For each cohort, calculate what percentage
- *    of their Month 0 revenue is retained in Month 1, Month 2, etc.
- *    - Values above 100% indicate net expansion (the cohort is growing).
- *    - A "smile" curve (dips then recovers) is a positive signal.
- *
- * 3. **Track logo retention**: Same as revenue retention but counting
- *    customers instead of dollars.  Logo retention is always <= 100%.
- *
- * Key considerations:
- * - **Incomplete cohorts**: The most recent cohort will have fewer data
- *   points.  Don't show Month 12 retention for a cohort that's only
- *   3 months old.
- *
- * - **Reactivations**: A customer who churns and returns should appear in
- *   their original cohort, with the churned months showing as 0% retention
- *   and the return month showing the revival.
- *
- * - **FX normalization**: Use a consistent FX rate (e.g., the rate at cohort
- *   creation) to avoid FX-driven retention fluctuations.
- *
- * - **Segmented cohorts**: Optionally break down cohorts by plan, segment,
- *   or acquisition channel for more granular insights.
- *
- * @param options - Calculation options including date range and segmentation
- * @returns Array of cohort data, one entry per cohort month
+ * @param data - Loaded datasets
+ * @param options - Calculation options (`endDate` bounds how far retention is computed)
+ * @returns One entry per signup cohort month
  */
 export async function buildCohortAnalysis(
+  data: LoadedData,
   options?: MetricOptions,
 ): Promise<CohortData[]> {
-  // TODO: Implement cohort analysis
-  throw new Error('Not implemented');
+  const horizonEnd = options?.endDate ?? new Date();
+  const fx = data.fxRates;
+
+  const byMonth = new Map<string, ChargebeeSubscription[]>();
+  for (const sub of data.chargebeeSubscriptions) {
+    const key = cohortMonthKey(sub.created_at);
+    const list = byMonth.get(key) ?? [];
+    list.push(sub);
+    byMonth.set(key, list);
+  }
+
+  const cohortKeys = [...byMonth.keys()].sort();
+  const out: CohortData[] = [];
+
+  for (const cohortMonth of cohortKeys) {
+    const subs = byMonth.get(cohortMonth)!;
+    const cohortStart = new Date(`${cohortMonth}-01T00:00:00.000Z`);
+    const cohortMonthEnd = endOfMonth(cohortStart);
+
+    let startRev = 0;
+    let logosAtStart = 0;
+    for (const sub of subs) {
+      if (!wasActiveOnDate(sub, cohortMonthEnd)) continue;
+      startRev += mrrUsd(sub, cohortMonthEnd, fx);
+      logosAtStart += 1;
+    }
+
+    if (logosAtStart === 0 || startRev <= 0) continue;
+
+    const retention: number[] = [];
+    const customerRetention: number[] = [];
+
+    let offset = 0;
+    while (offset <= 36) {
+      const snap = endOfMonth(addMonths(cohortStart, offset));
+      if (snap > horizonEnd) break;
+
+      if (offset === 0) {
+        retention.push(100);
+        customerRetention.push(100);
+        offset += 1;
+        continue;
+      }
+
+      let rev = 0;
+      let logos = 0;
+      for (const sub of subs) {
+        if (!wasActiveOnDate(sub, snap)) continue;
+        rev += mrrUsd(sub, snap, fx);
+        logos += 1;
+      }
+
+      retention.push(startRev > 0 ? (rev / startRev) * 100 : 0);
+      customerRetention.push(logosAtStart > 0 ? (logos / logosAtStart) * 100 : 0);
+      offset += 1;
+    }
+
+    const lastSnap = endOfMonth(addMonths(cohortStart, Math.max(0, retention.length - 1)));
+    let latestRev = 0;
+    let latestLogos = 0;
+    for (const sub of subs) {
+      if (!wasActiveOnDate(sub, lastSnap)) continue;
+      latestRev += mrrUsd(sub, lastSnap, fx);
+      latestLogos += 1;
+    }
+
+    out.push({
+      cohortMonth,
+      customers: logosAtStart,
+      revenue: startRev,
+      retention,
+      customerRetention,
+      avgRevenueAtSignup: logosAtStart > 0 ? startRev / logosAtStart : 0,
+      avgRevenueLatest: latestLogos > 0 ? latestRev / latestLogos : 0,
+    });
+  }
+
+  return out;
 }

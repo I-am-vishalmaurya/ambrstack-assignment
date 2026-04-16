@@ -11,25 +11,25 @@ Raw Data Files (data/)
        │
        ▼
 ┌─────────────────────────────────────┐
-│  Ingestion Layer (src/ingestion/)   │  Parse + validate + normalize each source
+│  Ingestion Layer (packages/data-engine/src/ingestion/)   │  Parse + validate + normalize each source
 │  Stripe, Chargebee, Legacy, SF...   │  Zod schemas enforce types at the boundary
 └─────────────────────────────────────┘
        │ Normalized typed records
        ▼
 ┌─────────────────────────────────────┐
 │  Reconciliation Layer               │  Entity resolution, dedup, revenue matching
-│  (src/reconciliation/)              │  Every discrepancy gets an audit record
+│  (packages/data-engine/src/reconciliation/)              │  Every discrepancy gets an audit record
 └─────────────────────────────────────┘
        │ UnifiedCustomer[] + Discrepancy[]
        ▼
 ┌─────────────────────────────────────┐
-│  Metrics Layer (src/metrics/)       │  ARR, NRR, Churn, Unit Economics, Cohorts
+│  Metrics Layer (packages/data-engine/src/metrics/)       │  ARR, NRR, Churn, Unit Economics, Cohorts
 │                                     │  Each metric carries its source lineage
 └─────────────────────────────────────┘
        │ Metric results with lineage
        ▼
 ┌─────────────────────────────────────┐
-│  API Layer (src/routes/)            │  Express routes, filter params, no logic
+│  API Layer (packages/data-engine/src/routes/)            │  Express routes, filter params, no logic
 │  Health + Scenarios                 │  I/O only — no business logic here
 └─────────────────────────────────────┘
        │ JSON over HTTP (port 3001)
@@ -55,9 +55,9 @@ downstream usage is read-only over the in-memory array.
 The failing test suite defines the implementation priority — not the CFO's list:
 
 ```
-1. Revenue reconciliation tests  (revenue.test.ts)     → src/reconciliation/revenue.ts
-2. Entity matching tests         (matchers.test.ts)     → src/reconciliation/matcher.ts
-3. Deduplication tests           (deduplication.test.ts)→ src/reconciliation/deduplication.ts
+1. Revenue reconciliation tests  (revenue.test.ts)     → packages/data-engine/src/reconciliation/revenue.ts
+2. Entity matching tests         (matchers.test.ts)     → packages/data-engine/src/reconciliation/matcher.ts
+3. Deduplication tests           (deduplication.test.ts)→ packages/data-engine/src/reconciliation/deduplication.ts
 4. All ingestion parsers         (no tests, but foundation for above)
 5. Metrics (ARR, NRR, Churn, Unit Economics, Cohorts)
 6. Health scoring
@@ -302,16 +302,16 @@ Target from CFO brief: < 18 months.
 ## Future Extensibility
 
 **Adding a new billing source (e.g., Paddle):**
-1. Add a `PaddleSubscription` interface to `src/ingestion/types.ts`
-2. Create `src/ingestion/paddle.ts` implementing the same normalized output shape
+1. Add a `PaddleSubscription` interface to `packages/data-engine/src/ingestion/types.ts`
+2. Create `packages/data-engine/src/ingestion/paddle.ts` implementing the same normalized output shape
 3. Add `DataSource.paddle` to the enum
 4. Add a Pass in entity resolution if Paddle customer IDs appear in Salesforce accounts
 5. Add a `paddle` entry to the source data mapping table in this document
 
 **Adding a new metric:**
-1. Define the result type in `src/metrics/types.ts`
-2. Implement in `src/metrics/<metric>.ts`
-3. Add a route in `src/routes/metrics.ts`
+1. Define the result type in `packages/data-engine/src/metrics/types.ts`
+2. Implement in `packages/data-engine/src/metrics/<metric>.ts`
+3. Add a route in `packages/data-engine/src/routes/metrics.ts`
 4. Add the API call in `packages/dashboard/src/api/client.ts`
 5. Document definition and edge cases in this file
 
@@ -326,3 +326,30 @@ timestamp in `ReconciliationResult.metadata` records the run time for the audit 
 3. Each metric calculator iterates `segmentation` options to group results — extend the groupBy
    logic in each metric file
 4. Add a filter control in the dashboard `useFilters` hook
+
+---
+
+## Implementation Map
+
+| Architecture Layer | Module Path | Responsibility |
+|---|---|---|
+| Data Ingestion | `packages/data-engine/src/ingestion/` | CSV, JSON, XML, JSONL loaders with Zod validation |
+| Data Bootstrap | `packages/data-engine/src/data/bootstrap.ts` | `loadAllDatasets()` — eager load all 12 data sources |
+| Data Singleton | `packages/data-engine/src/data/singleton.ts` | `getData()` — cached singleton for server lifetime |
+| Entity Resolution | `packages/data-engine/src/reconciliation/entity-resolution.ts` | Five-pass matcher producing `UnifiedCustomer[]` |
+| Revenue Reconciliation | `packages/data-engine/src/reconciliation/revenue.ts` | Expected vs actual revenue with 2% threshold |
+| Duplicate Detection | `packages/data-engine/src/reconciliation/deduplication.ts` | Stripe/Chargebee overlap detection + classification |
+| Pipeline Quality | `packages/data-engine/src/reconciliation/pipeline.ts` | Zombie deals, stage mismatches, unbooked revenue |
+| ARR Metrics | `packages/data-engine/src/metrics/arr.ts` | Annual recurring revenue with segment breakdowns |
+| NRR Metrics | `packages/data-engine/src/metrics/nrr.ts` | Net revenue retention with period-end FX |
+| Churn Metrics | `packages/data-engine/src/metrics/churn.ts` | Gross/net/logo churn with >3% threshold flag |
+| Unit Economics | `packages/data-engine/src/metrics/unit-economics.ts` | CAC, LTV, payback with 18-month target |
+| Cohort Analysis | `packages/data-engine/src/metrics/cohorts.ts` | Revenue and logo retention by signup month |
+| Health Scoring | `packages/data-engine/src/health/scorer.ts` | Multi-signal model with NPS 180-day decay |
+| Scenario Engine | `packages/data-engine/src/scenarios/engine.ts` | 12-month what-if projection with impact breakdown |
+| FX Conversion | `packages/data-engine/src/utils/fx.ts` | `convertToUSD()` with earliest-rate fallback |
+| Date Parsing | `packages/data-engine/src/utils/date-parser.ts` | Ambiguous DD/MM vs MM/DD with neighbor voting |
+| Name Normalization | `packages/data-engine/src/utils/normalization.ts` | Legal suffix stripping, amount normalization |
+| Audit Store | `packages/data-engine/src/audit/store.ts` | In-memory append-only audit log |
+| API Layer | `packages/data-engine/src/routes/` | Express REST endpoints for all services |
+| Dashboard | `packages/dashboard/src/` | React + TanStack Query consuming API |

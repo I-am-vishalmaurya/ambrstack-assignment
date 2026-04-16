@@ -9,3 +9,4 @@ scripts/
 .DS_Store
 coverage/
 *.log
+._*

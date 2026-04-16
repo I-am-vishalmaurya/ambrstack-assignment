@@ -153,6 +153,8 @@ export interface LegacyInvoice {
   description: string | null;
   /** Optional reference to an external payment (may be a Stripe charge ID). */
   payment_ref: string | null;
+  /** True when amount was converted using an approximate FX rate. */
+  fxRateApproximated?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +173,7 @@ export interface SalesforceOpportunity {
   close_date: string;
   created_date: string;
   probability: number;
+  last_activity_date: string;
   forecast_category: 'pipeline' | 'best_case' | 'commit' | 'closed' | 'omitted';
   type: 'new_business' | 'expansion' | 'renewal';
   owner_name: string;
@@ -302,6 +305,8 @@ export interface PlanPricing {
   effective_to: string | null;
   /** If true, this plan is no longer sold but existing subscribers are grandfathered. */
   is_legacy: boolean;
+  /** Raw billing model from source data (e.g. flat-rate, per-seat). */
+  billing_model: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +371,7 @@ export interface UnifiedCustomer {
     stripe_customer_id: string | null;
     chargebee_customer_id: string | null;
     salesforce_account_id: string | null;
+    legacy_invoice_id: string | null;
   };
   /** Segment classification. */
   segment: 'enterprise' | 'mid_market' | 'smb' | 'startup';
@@ -395,6 +401,8 @@ export interface UnifiedCustomer {
   usage_score: number;
   /** Confidence score for the entity resolution match (0-1). */
   match_confidence: number;
+  /** True when automated matching is uncertain and a human should review. */
+  needs_review: boolean;
   /** Sources that contributed data to this unified record. */
   data_sources: DataSource[];
 }

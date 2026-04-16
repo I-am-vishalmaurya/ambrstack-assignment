@@ -1,32 +1,82 @@
+import { isValid, parseISO } from 'date-fns';
+
+type FormatHint = 'DD/MM/YYYY' | 'MM/DD/YYYY';
+
+function expandTwoDigitYear(year: number): number {
+  if (year >= 100) return year;
+  return year < 50 ? 2000 + year : 1900 + year;
+}
+
+function utcDate(y: number, m0: number, d: number): Date {
+  return new Date(Date.UTC(y, m0, d, 0, 0, 0, 0));
+}
+
+function tryParseIso(dateStr: string): Date | null {
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const d = parseISO(trimmed.length === 10 ? `${trimmed}T00:00:00.000Z` : trimmed);
+    return isValid(d) ? d : null;
+  }
+  return null;
+}
+
+const SLASHY = /^(\d{1,2})([/.\-])(\d{1,2})\2(\d{2}|\d{4})$/;
+
+function parseNumericParts(
+  a: number,
+  b: number,
+  yRaw: number,
+  order: 'DMY' | 'MDY',
+): Date {
+  const year = expandTwoDigitYear(yRaw);
+  // Date.UTC(year, monthIndex, day)
+  if (order === 'DMY') {
+    return utcDate(year, b - 1, a);
+  }
+  return utcDate(year, a - 1, b);
+}
+
+function classifySlashDate(a: number, b: number): 'DMY' | 'MDY' | 'ambiguous' {
+  if (a > 12) return 'DMY';
+  if (b > 12) return 'MDY';
+  if (a === b) return 'DMY';
+  return 'ambiguous';
+}
+
+function voteFromNeighbor(
+  dateStr: string,
+  neighborDates: string[] | undefined,
+): FormatHint | null {
+  if (!neighborDates?.length) return null;
+  let dmyVotes = 0;
+  let mdyVotes = 0;
+  for (const n of neighborDates) {
+    const m = n.trim().match(SLASHY);
+    if (!m) continue;
+    const a = Number(m[1]);
+    const b = Number(m[3]);
+    const c = classifySlashDate(a, b);
+    if (c === 'DMY') dmyVotes++;
+    else if (c === 'MDY') mdyVotes++;
+  }
+  if (dmyVotes > mdyVotes) return 'DD/MM/YYYY';
+  if (mdyVotes > dmyVotes) return 'MM/DD/YYYY';
+  return null;
+}
+
+function parseSlashy(dateStr: string, order: 'DMY' | 'MDY'): Date {
+  const m = dateStr.trim().match(SLASHY);
+  if (!m) {
+    throw new Error(`Expected slash/dot/dash date, got: ${dateStr}`);
+  }
+  const a = Number(m[1]);
+  const b = Number(m[3]);
+  const yRaw = Number(m[4]);
+  return parseNumericParts(a, b, yRaw, order);
+}
+
 /**
  * Ambiguous date format parser.
- *
- * The legacy billing system used inconsistent date formats depending on the
- * operator's locale settings.  Some dates are DD/MM/YYYY (European) and
- * others are MM/DD/YYYY (US).  Dates like "03/04/2023" are genuinely
- * ambiguous -- it could be March 4 or April 3.
- *
- * Disambiguation strategies:
- *
- * 1. **Unambiguous dates**: If the day component is > 12 (e.g., "25/03/2023"),
- *    the format is definitively DD/MM/YYYY.  If the month component is > 12,
- *    it's definitively MM/DD/YYYY.
- *
- * 2. **Contextual clues**: If a `context` object is provided with neighboring
- *    dates from the same customer/invoice sequence, use the unambiguous dates
- *    in the sequence to infer the format for ambiguous ones.
- *
- * 3. **ISO-8601 passthrough**: If the date string is already in ISO-8601
- *    format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss), parse it directly.
- *
- * 4. **Fallback**: When no disambiguation is possible, default to MM/DD/YYYY
- *    (US format) as the majority of the data uses this convention.
- *
- * Also handles:
- * - Dates with dashes (DD-MM-YYYY, MM-DD-YYYY)
- * - Dates with dots (DD.MM.YYYY)
- * - Two-digit years (23 -> 2023, 99 -> 1999)
- * - Whitespace trimming
  *
  * @param dateStr - Raw date string from the data source
  * @param context - Optional context for disambiguation
@@ -37,12 +87,50 @@
 export function parseAmbiguousDate(
   dateStr: string,
   context?: {
-    /** Other dates from the same customer / invoice sequence. */
     neighborDates?: string[];
-    /** Known format hint from metadata. */
-    formatHint?: 'DD/MM/YYYY' | 'MM/DD/YYYY';
+    formatHint?: FormatHint;
   },
 ): Date {
-  // TODO: Implement ambiguous date parsing with contextual disambiguation
-  throw new Error('Not implemented');
+  const trimmed = dateStr.trim();
+  if (trimmed.length === 0) {
+    throw new Error('Empty date string');
+  }
+
+  const iso = tryParseIso(trimmed);
+  if (iso) return iso;
+
+  const slash = trimmed.match(SLASHY);
+  if (slash) {
+    const a = Number(slash[1]);
+    const b = Number(slash[3]);
+    const yRaw = Number(slash[4]);
+    const kind = classifySlashDate(a, b);
+
+    if (kind === 'DMY') {
+      return parseNumericParts(a, b, yRaw, 'DMY');
+    }
+    if (kind === 'MDY') {
+      return parseNumericParts(a, b, yRaw, 'MDY');
+    }
+
+    const hinted: FormatHint | undefined = context?.formatHint;
+    if (hinted === 'DD/MM/YYYY') {
+      return parseNumericParts(a, b, yRaw, 'DMY');
+    }
+    if (hinted === 'MM/DD/YYYY') {
+      return parseNumericParts(a, b, yRaw, 'MDY');
+    }
+
+    const voted = voteFromNeighbor(trimmed, context?.neighborDates);
+    if (voted === 'DD/MM/YYYY') {
+      return parseNumericParts(a, b, yRaw, 'DMY');
+    }
+    if (voted === 'MM/DD/YYYY') {
+      return parseNumericParts(a, b, yRaw, 'MDY');
+    }
+
+    return parseNumericParts(a, b, yRaw, 'MDY');
+  }
+
+  throw new Error(`Unable to parse date: ${dateStr}`);
 }
